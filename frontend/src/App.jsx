@@ -1,0 +1,64 @@
+import { Navigate, Route, Routes } from "react-router-dom";
+
+import { ProtectedRoute } from "./components/ProtectedRoute";
+import { AppShell } from "./components/AppShell";
+import { RoleRoute } from "./components/RoleRoute";
+import { AccountSettingsPage } from "./pages/AccountSettingsPage";
+import { AdminDashboardPage } from "./pages/AdminDashboardPage";
+import { AssignedClientsPage } from "./pages/AssignedClientsPage";
+import { CategoryManagementPage } from "./pages/CategoryManagementPage";
+import { ClientListPage } from "./pages/ClientListPage";
+import { HomePage } from "./pages/HomePage";
+import { LoginPage } from "./pages/LoginPage";
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/app"
+        element={
+          <ProtectedRoute>
+            <AppShell />
+          </ProtectedRoute>
+        }
+        >
+          <Route index element={<HomePage />} />
+          <Route path="settings" element={<AccountSettingsPage />} />
+          <Route
+            path="categories"
+            element={
+              <RoleRoute allowedRoles={["Client"]}>
+                <CategoryManagementPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="assigned-clients"
+            element={
+              <RoleRoute allowedRoles={["Coach"]}>
+                <AssignedClientsPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="clients"
+            element={
+              <RoleRoute allowedRoles={["Admin"]}>
+                <ClientListPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="admin-dashboard"
+            element={
+              <RoleRoute allowedRoles={["Admin"]}>
+                <AdminDashboardPage />
+              </RoleRoute>
+            }
+          />
+        </Route>
+      <Route path="*" element={<Navigate to="/app" replace />} />
+    </Routes>
+  );
+}
