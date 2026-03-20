@@ -1,10 +1,17 @@
+import csv
+import io
+
 from django.contrib.auth.models import User
+from django.db import transaction
 from django.db.models import Count, F, Q
 from django.utils import timezone
 from rest_framework import permissions, viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from drf_spectacular.utils import extend_schema
 
 from accounts.constants import ROLE_ADMIN, ROLE_CLIENT, ROLE_COACH
 from accounts.models import UserProfile
@@ -14,6 +21,7 @@ from .pagination import StandardResultsSetPagination
 from .permissions import RBACScope
 from .serializers import (
     AdminManagedUserSerializer,
+    AdminManagedUserCSVImportSerializer,
     AnalyticsSummarySerializer,
     ClientAssignmentSerializer,
     EventCategorySerializer,
@@ -182,6 +190,93 @@ class AdminManagedUserViewSet(viewsets.ModelViewSet):
         if instance.groups.filter(name=ROLE_COACH).exists() and instance.coached_clients.exists():
             raise ValidationError({"assigned_coach_id": "Reassign this coach's clients before deleting the coach."})
         instance.delete()
+
+    def _normalize_csv_value(self, value):
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    def _build_csv_payload(self, uploaded_file):
+        try:
+            decoded_file = uploaded_file.read().decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValidationError({"file": "CSV file must be UTF-8 encoded."}) from exc
+
+        reader = csv.DictReader(io.StringIO(decoded_file))
+        required_columns = {"username", "password", "role"}
+        if not reader.fieldnames:
+            raise ValidationError({"file": "CSV file must include a header row."})
+        missing_columns = sorted(required_columns.difference(set(reader.fieldnames)))
+        if missing_columns:
+            raise ValidationError({"file": f"CSV file is missing required columns: {', '.join(missing_columns)}."})
+
+        payload = []
+        for index, row in enumerate(reader, start=2):
+            normalized_row = {key: self._normalize_csv_value(value) for key, value in row.items()}
+            if not any(normalized_row.values()):
+                continue
+
+            item = {
+                "username": normalized_row.get("username"),
+                "password": normalized_row.get("password"),
+                "first_name": normalized_row.get("first_name") or "",
+                "last_name": normalized_row.get("last_name") or "",
+                "email": normalized_row.get("email") or "",
+                "role": normalized_row.get("role"),
+            }
+
+            assigned_coach_id = normalized_row.get("assigned_coach_id")
+            if assigned_coach_id is not None:
+                item["assigned_coach_id"] = assigned_coach_id
+
+            phone_number = normalized_row.get("phone_number")
+            if phone_number is not None:
+                item["phone_number"] = phone_number
+
+            payload.append(item)
+
+        if not payload:
+            raise ValidationError({"file": "CSV file did not contain any user rows."})
+
+        return payload
+
+    @extend_schema(
+        request=AdminManagedUserSerializer(many=True),
+        responses={201: AdminManagedUserSerializer(many=True)},
+    )
+    @action(detail=False, methods=["post"], url_path="bulk")
+    def bulk_create(self, request):
+        serializer = self.get_serializer(data=request.data, many=True)
+        serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            users = serializer.save()
+        response_serializer = self.get_serializer(users, many=True)
+        return Response(response_serializer.data, status=201)
+
+    @extend_schema(
+        request=AdminManagedUserCSVImportSerializer,
+        responses={201: AdminManagedUserSerializer(many=True)},
+    )
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="import-csv",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def import_csv(self, request):
+        upload_serializer = AdminManagedUserCSVImportSerializer(data=request.data)
+        upload_serializer.is_valid(raise_exception=True)
+
+        payload = self._build_csv_payload(upload_serializer.validated_data["file"])
+        serializer = self.get_serializer(data=payload, many=True)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            users = serializer.save()
+
+        response_serializer = self.get_serializer(users, many=True)
+        return Response(response_serializer.data, status=201)
 
 
 class AdminAnalyticsView(APIView):

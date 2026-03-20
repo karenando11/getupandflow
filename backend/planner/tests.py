@@ -1,6 +1,7 @@
 from datetime import date, datetime, time
 
 from django.contrib.auth.models import Group, User
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -257,6 +258,119 @@ class PlannerRBACAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["assigned_coach_id"], self.coach_two.id)
 
+    def test_admin_can_bulk_create_coaches_and_clients(self):
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            reverse("admin-user-bulk-create"),
+            [
+                {
+                    "username": "bulkcoach1",
+                    "password": "Pass12345!",
+                    "first_name": "Robin",
+                    "last_name": "Coach",
+                    "email": "bulkcoach1@example.com",
+                    "role": ROLE_COACH,
+                },
+                {
+                    "username": "bulkclient1",
+                    "password": "Pass12345!",
+                    "first_name": "Avery",
+                    "last_name": "Client",
+                    "email": "bulkclient1@example.com",
+                    "role": ROLE_CLIENT,
+                    "assigned_coach_id": self.coach_one.id,
+                },
+            ],
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(response.data), 2)
+        self.assertEqual(response.data[0]["role"], ROLE_COACH)
+        self.assertEqual(response.data[1]["role"], ROLE_CLIENT)
+        self.assertEqual(response.data[1]["assigned_coach_id"], self.coach_one.id)
+        self.assertTrue(User.objects.filter(username="bulkcoach1").exists())
+        self.assertTrue(User.objects.filter(username="bulkclient1").exists())
+
+    def test_admin_bulk_create_is_atomic(self):
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            reverse("admin-user-bulk-create"),
+            [
+                {
+                    "username": "atomiccoach1",
+                    "password": "Pass12345!",
+                    "first_name": "Robin",
+                    "last_name": "Coach",
+                    "email": "atomiccoach1@example.com",
+                    "role": ROLE_COACH,
+                },
+                {
+                    "username": "atomicclient1",
+                    "password": "Pass12345!",
+                    "first_name": "Avery",
+                    "last_name": "Client",
+                    "email": "atomicclient1@example.com",
+                    "role": ROLE_CLIENT,
+                },
+            ],
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(User.objects.filter(username="atomiccoach1").exists())
+        self.assertFalse(User.objects.filter(username="atomicclient1").exists())
+
+    def test_admin_can_import_users_from_csv(self):
+        self.authenticate(self.admin)
+        csv_file = SimpleUploadedFile(
+            "users.csv",
+            (
+                "username,password,first_name,last_name,email,role,assigned_coach_id,phone_number\n"
+                "csvcoach1,Pass12345!,Robin,Coach,csvcoach1@example.com,Coach,,555-1111\n"
+                f"csvclient1,Pass12345!,Avery,Client,csvclient1@example.com,Client,{self.coach_one.id},555-2222\n"
+            ).encode("utf-8"),
+            content_type="text/csv",
+        )
+
+        response = self.client.post(
+            reverse("admin-user-import-csv"),
+            {"file": csv_file},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(response.data), 2)
+        self.assertEqual(response.data[0]["role"], ROLE_COACH)
+        self.assertEqual(response.data[1]["role"], ROLE_CLIENT)
+        self.assertEqual(response.data[1]["assigned_coach_id"], self.coach_one.id)
+        self.assertTrue(User.objects.filter(username="csvcoach1").exists())
+        self.assertTrue(User.objects.filter(username="csvclient1").exists())
+
+    def test_admin_csv_import_is_atomic(self):
+        self.authenticate(self.admin)
+        csv_file = SimpleUploadedFile(
+            "invalid-users.csv",
+            (
+                "username,password,first_name,last_name,email,role,assigned_coach_id\n"
+                "csvatomiccoach,Pass12345!,Robin,Coach,csvatomiccoach@example.com,Coach,\n"
+                "csvatomicclient,Pass12345!,Avery,Client,csvatomicclient@example.com,Client,\n"
+            ).encode("utf-8"),
+            content_type="text/csv",
+        )
+
+        response = self.client.post(
+            reverse("admin-user-import-csv"),
+            {"file": csv_file},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(User.objects.filter(username="csvatomiccoach").exists())
+        self.assertFalse(User.objects.filter(username="csvatomicclient").exists())
+
     def test_admin_can_delete_client(self):
         removable_client = User.objects.create_user(username="client-delete", password="Pass12345!")
         removable_client.groups.add(self.client_group)
@@ -273,6 +387,42 @@ class PlannerRBACAPITests(APITestCase):
         self.authenticate(self.coach_one)
 
         response = self.client.get(reverse("admin-user-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_non_admin_cannot_bulk_create_admin_users(self):
+        self.authenticate(self.coach_one)
+
+        response = self.client.post(
+            reverse("admin-user-bulk-create"),
+            [
+                {
+                    "username": "blockedbulkuser",
+                    "password": "Pass12345!",
+                    "first_name": "Blocked",
+                    "last_name": "User",
+                    "email": "blocked@example.com",
+                    "role": ROLE_COACH,
+                }
+            ],
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_non_admin_cannot_import_admin_users_from_csv(self):
+        self.authenticate(self.coach_one)
+        csv_file = SimpleUploadedFile(
+            "blocked-users.csv",
+            "username,password,role\nblockedcsv,Pass12345!,Coach\n".encode("utf-8"),
+            content_type="text/csv",
+        )
+
+        response = self.client.post(
+            reverse("admin-user-import-csv"),
+            {"file": csv_file},
+            format="multipart",
+        )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 

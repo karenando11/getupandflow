@@ -139,6 +139,10 @@ class AnalyticsSummarySerializer(serializers.Serializer):
     events_per_month = serializers.ListField()
 
 
+class AdminManagedUserCSVImportSerializer(serializers.Serializer):
+    file = serializers.FileField()
+
+
 class AdminManagedUserSerializer(serializers.ModelSerializer):
     role = serializers.CharField(write_only=True)
     assigned_coach_id = serializers.PrimaryKeyRelatedField(
