@@ -2,7 +2,12 @@ import axios from "axios";
 
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from "../auth/storage";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000/api";
+const DEFAULT_PRODUCTION_API_BASE_URL = "https://remaining-dalila-cheesecakemaster-ed9f83f4.koyeb.app/api";
+const DEFAULT_DEVELOPMENT_API_BASE_URL = "http://127.0.0.1:8000/api";
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.PROD ? DEFAULT_PRODUCTION_API_BASE_URL : DEFAULT_DEVELOPMENT_API_BASE_URL);
 
 let refreshPromise = null;
 
